@@ -725,6 +725,33 @@ class TestNewConfigFieldDefaults:
         assert cfg.write_frequency == "async"
 
 
+class TestHonchoMessageProvenance:
+    def test_flush_routes_only_user_and_assistant_roles(self, make_manager):
+        mgr = make_manager(write_frequency="turn")
+        session = _make_session()
+        session.add_message("user", "human message")
+        session.add_message("assistant", "agent response")
+        session.add_message("tool", "tool output must not be persisted")
+
+        user_peer = MagicMock(name="user-peer")
+        assistant_peer = MagicMock(name="assistant-peer")
+        user_peer.message.side_effect = lambda content: ("user", content)
+        assistant_peer.message.side_effect = lambda content: ("assistant", content)
+        honcho_session = MagicMock(name="honcho-session")
+        mgr._peers_cache[session.user_peer_id] = user_peer
+        mgr._peers_cache[session.assistant_peer_id] = assistant_peer
+        mgr._sessions_cache[session.honcho_session_id] = honcho_session
+
+        assert mgr._flush_session(session) is True
+
+        payload = honcho_session.add_messages.call_args.args[0]
+        assert payload == [
+            ("user", "human message"),
+            ("assistant", "agent response"),
+        ]
+        assistant_peer.message.assert_called_once_with("agent response")
+
+
 class TestPrefetchCacheAccessors:
     def test_set_and_pop_context_result(self, make_manager):
         mgr = make_manager(write_frequency="turn")

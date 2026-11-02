@@ -447,13 +447,26 @@ class HonchoSessionManager(SessionAuthMixin, SessionPeersMixin, SessionContextMi
                         self._session_observation[session.honcho_session_id] = observation
             honcho_messages = []
             for m in new_messages:
-                if m["role"] != "user":
+                role = m.get("role")
+                if role not in ("user", "assistant"):
+                    # System/tool/developer events are not conversational
+                    # authors and must never be silently attributed to either
+                    # the human or the assistant peer.
+                    logger.debug(
+                        "Skipping unsupported Honcho message role %r for %s",
+                        role,
+                        session.key,
+                    )
+                    continue
+                if role != "user":
                     honcho_messages.append(assistant_peer.message(m["content"]))
                     continue
                 author_peer_id = m.get("author_peer_id")
                 peer = (self._author_peer_for_session(honcho_session, session.honcho_session_id, author_peer_id)
                         if author_peer_id else user_peer)
                 honcho_messages.append(peer.message(m["content"]))
+            if not honcho_messages:
+                return 0
             honcho_session.add_messages(honcho_messages)
             return len(honcho_messages)
 

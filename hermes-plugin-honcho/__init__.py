@@ -27,6 +27,7 @@ from .client import HonchoClientConfig, resolve_config_path
 from .client import _host_block, _HostLookup
 from .client import join_plugin_threads, spawn_context_thread
 from .dialectic import DialecticMixin
+from .provenance import _sanitize_auto_injected_text, config_peers
 from .session_peers import assistant_peer_id_for, sanitize_peer_id
 from .session_context import usable_honcho_summary
 from .tool_schemas import ALL_TOOL_SCHEMAS
@@ -49,6 +50,8 @@ _INTERNAL_GATEWAY_TURN_RE = re.compile(
     r"\[Your active task list was preserved across context compression\]|"
     r"\[IMPORTANT: Background process \d+ matched watch pattern[^\n]*|"
     r"\[(?:Group chat|Discussion):|"
+    r"<task-notification\b[^>]*>|"
+    r"<system-reminder\b[^>]*>|"
     r"A background fan-out of \d+ subagent\(s\) you dispatched earlier has finished\.|"
     r"A background subagent you dispatched earlier has finished\."
     r")",
@@ -441,12 +444,14 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
 
     def _format_first_turn_context(self, ctx: dict) -> str:
         """Render the prefetch context, keeping only the ``injection.sessionStart`` components when pinned.
-        The summary passes usable_honcho_summary here, so a contaminated one never reaches _base_context_cache."""
+        The summary passes usable_honcho_summary here, so a contaminated one never reaches _base_context_cache.
+        Every section is run through _sanitize_auto_injected_text so machine-generated blocks never
+        re-enter the prompt as if the user or the assistant had written them."""
         ctx = {**ctx, "summary": usable_honcho_summary(ctx.get("summary")) or ""}
         allowed = self._session_start_components
         parts, suppressed = [], []
         for name, key, header in _CONTEXT_SECTIONS:
-            value = ctx.get(key, "")
+            value = _sanitize_auto_injected_text(ctx.get(key, ""), *config_peers(self._config))
             if not value:
                 continue
             if allowed is not None and name not in allowed:
@@ -866,7 +871,7 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
         A bot author's turn is written into that bot's own a2a session, never the human's."""
         if not self._writes_enabled():
             return
-        if _is_internal_gateway_turn(user_content):
+        if _is_internal_gateway_turn(user_content) or _is_internal_gateway_turn(assistant_content):
             logger.debug("Honcho sync skipped machine-generated gateway turn")
             return
         if not self._ready_or_kick_init():

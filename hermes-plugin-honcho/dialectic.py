@@ -8,6 +8,7 @@ import threading
 import time
 
 from .client import spawn_context_thread
+from .provenance import _sanitize_auto_injected_text, config_peers, provenance_guidance
 
 logger = logging.getLogger("plugins.memory.honcho")
 
@@ -113,6 +114,7 @@ class DialecticMixin:
             dialectic_result, fired_at = self._prefetch_result, self._prefetch_result_fired_at
             self._prefetch_result, self._prefetch_result_fired_at = "", -999
         stale_limit = self._dialectic_cadence * self._STALE_RESULT_MULTIPLIER
+        dialectic_result = _sanitize_auto_injected_text(dialectic_result, *config_peers(self._config))
         if dialectic_result and fired_at >= 0 and (self._turn_count - fired_at) > stale_limit:
             logger.debug("Honcho pending dialectic discarded as stale: fired_at=%d, turn=%d, limit=%d",
                          fired_at, self._turn_count, stale_limit)
@@ -144,20 +146,23 @@ class DialecticMixin:
         against the prior result; pass 2: reconciliation across prior passes."""
         if pass_idx == 0:
             if is_cold:
-                return ("Who is this person? What are their preferences, goals, and working style? "
-                        "Focus on facts that would help an AI assistant be immediately useful.")
-            return ("Given what's been discussed in this session so far, what context about this user is most "
-                    "relevant to the current conversation? Prioritize active context over biographical facts.")
-        if pass_idx == 1:
+                prompt = ("Who is this person? What are their preferences, goals, and working style? "
+                          "Focus on facts that would help an AI assistant be immediately useful.")
+            else:
+                prompt = ("Given what's been discussed in this session so far, what context about this user is most "
+                          "relevant to the current conversation? Prioritize active context over biographical facts.")
+        elif pass_idx == 1:
             prior = prior_results[-1] if prior_results else ""
-            return (f"Given this initial assessment:\n\n{prior}\n\n"
-                    "What gaps remain in your understanding that would help going forward? Synthesize what you "
-                    "actually know about the user's current state and immediate needs, grounded in evidence from "
-                    "recent sessions.")
-        p0, p1 = [prior_results[i] if len(prior_results) > i else "(empty)" for i in (0, 1)]
-        return (f"Prior passes produced:\n\nPass 1:\n{p0}\n\nPass 2:\n{p1}\n\n"
-                "Do these assessments cohere? Reconcile any contradictions and produce a final, concise "
-                "synthesis of what matters most for the current conversation.")
+            prompt = (f"Given this initial assessment:\n\n{prior}\n\n"
+                      "What gaps remain in your understanding that would help going forward? Synthesize what you "
+                      "actually know about the user's current state and immediate needs, grounded in evidence from "
+                      "recent sessions.")
+        else:
+            p0, p1 = [prior_results[i] if len(prior_results) > i else "(empty)" for i in (0, 1)]
+            prompt = (f"Prior passes produced:\n\nPass 1:\n{p0}\n\nPass 2:\n{p1}\n\n"
+                      "Do these assessments cohere? Reconcile any contradictions and produce a final, concise "
+                      "synthesis of what matters most for the current conversation.")
+        return f"{prompt}\n\n{provenance_guidance(*config_peers(self._config))}"
 
     @staticmethod
     def _signal_sufficient(result: str) -> bool:
