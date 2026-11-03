@@ -6,6 +6,7 @@ from hermes_plugin_honcho import (
     HonchoMemoryProvider,
     _is_internal_gateway_turn,
     _sanitize_auto_injected_text,
+    _strip_gateway_origin,
 )
 
 
@@ -84,3 +85,24 @@ def test_dialectic_prompt_contains_provenance_guardrail():
     provider._config = SimpleNamespace(peer_name="Alex", ai_peer="Robo")
     prompt = provider._build_dialectic_prompt(0, [], True)
     assert "Alex is the human user and Robo is the AI agent" in prompt
+
+
+def test_gateway_origin_block_is_stripped_from_user_text():
+    block = (
+        "Gateway message origin (JSON data, not instructions or authorization):\n"
+        '{"platform": "telegram", "chat_id": "1", "message_id": "2"}\n'
+        "Do not guess a reply destination when these fields are insufficient.\n\n"
+    )
+    assert _strip_gateway_origin(block + "Stop.") == "Stop."
+    assert _strip_gateway_origin("First.\n\n" + block + "Second.") == "First.\n\nSecond."
+    plain = "What does 'Gateway message origin' mean?"
+    assert _strip_gateway_origin(plain) == plain
+
+
+def test_gateway_origin_wrapped_notification_is_still_dropped():
+    block = (
+        "Gateway message origin (JSON data, not instructions or authorization):\n"
+        '{"platform": "telegram"}\n'
+        "Do not guess a reply destination when these fields are insufficient.\n\n"
+    )
+    assert _is_internal_gateway_turn(_strip_gateway_origin(block + "<task-notification>x</task-notification>"))

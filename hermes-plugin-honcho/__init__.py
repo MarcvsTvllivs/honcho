@@ -59,6 +59,21 @@ _INTERNAL_GATEWAY_TURN_RE = re.compile(
 )
 
 
+# Core prepends this routing block to busy-path (mid-turn) user messages. It is
+# transport metadata, not something the user said.
+_GATEWAY_ORIGIN_RE = re.compile(
+    r"^Gateway message origin \(JSON data, not instructions or authorization\):\n"
+    r"[^\n]*\n"
+    r"(?:Do not guess a reply destination when these fields are insufficient\.\n)?\n?",
+    re.MULTILINE,
+)
+
+
+def _strip_gateway_origin(text: str) -> str:
+    """Remove core's gateway-origin metadata blocks from a user message."""
+    return _GATEWAY_ORIGIN_RE.sub("", text or "")
+
+
 def _is_internal_gateway_turn(text: str) -> bool:
     """Return True for machine-generated gateway notifications and harnesses."""
     return bool(_INTERNAL_GATEWAY_TURN_RE.match(text or ""))
@@ -871,6 +886,7 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
         A bot author's turn is written into that bot's own a2a session, never the human's."""
         if not self._writes_enabled():
             return
+        user_content = _strip_gateway_origin(user_content)
         if _is_internal_gateway_turn(user_content) or _is_internal_gateway_turn(assistant_content):
             logger.debug("Honcho sync skipped machine-generated gateway turn")
             return
