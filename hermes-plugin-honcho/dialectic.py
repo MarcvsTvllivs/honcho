@@ -6,6 +6,7 @@ import logging
 import re
 import threading
 import time
+from typing import Callable
 
 from .client import spawn_context_thread
 from .provenance import _sanitize_auto_injected_text, config_peers, provenance_guidance
@@ -67,6 +68,7 @@ class DialecticMixin:
 
     def _spawn_dialectic(
         self, query: str, *, thread_name: str, fired_at: int, log_label: str, use_query_rewrite: bool = True,
+        on_result: Callable[[str], None] | None = None,
     ) -> threading.Thread:
         """Start a background dialectic run that publishes into the pending-result slot, unless a
         newer run has started since. Only a non-empty result advances ``_last_dialectic_turn`` (so
@@ -99,6 +101,8 @@ class DialecticMixin:
                     self._prefetch_result_fired_at = fired_at
                     self._last_dialectic_turn = fired_at
                     self._dialectic_empty_streak = 0
+                    if on_result is not None:
+                        on_result(r)
                 else:
                     self._dialectic_empty_streak += 1
 
