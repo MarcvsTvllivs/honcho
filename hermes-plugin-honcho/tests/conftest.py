@@ -138,3 +138,11 @@ def _no_leaked_writer_threads():
         f"leaked honcho-async-writer threads: {len(leaked)} - "
         "call manager.shutdown() (use the make_manager fixture)"
     )
+
+
+@pytest.fixture(autouse=True)
+def _clear_prewarm_cache():
+    """The prewarm reuse cache is process-wide by design; keep tests from sharing it."""
+    _plugin._prewarm_cache.clear()
+    yield
+    _plugin._prewarm_cache.clear()

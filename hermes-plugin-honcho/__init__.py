@@ -131,6 +131,25 @@ _CONTEXT_SECTIONS = (
 
 _PREWARM_QUERY = "Summarize what you know about this user. Focus on preferences, current projects, and working style."
 
+# Prewarm results of resumed sessions, shared by every provider in this process. A dashboard/TUI
+# client that reconnects resumes the same stored session and builds a new provider each time; without
+# this, each reconnect re-runs the same server-side dialectic (a tool loop, tens of thousands of
+# tokens). An entry is reused only while the session has no newer message and is younger than the TTL.
+_PREWARM_REUSE_TTL = 6 * 3600.0
+_PREWARM_CACHE_MAX = 64
+_prewarm_cache: Dict[tuple, tuple] = {}  # (base_url, workspace, session key) -> (marker, monotonic time, result)
+_prewarm_cache_lock = threading.Lock()
+
+
+def _session_marker(session: Any) -> Optional[str]:
+    """Identify the newest stored message of ``session``; None for a session with no history."""
+    messages = list(getattr(session, "messages", None) or [])
+    if not messages:
+        return None
+    last = messages[-1]
+    digest = hashlib.sha256(str(last.get("content", "")).encode()).hexdigest()[:16]
+    return f"{len(messages)}|{last.get('timestamp', '')}|{digest}"
+
 
 class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
     """Honcho AI-native memory with dialectic Q&A and persistent user modeling."""
@@ -414,13 +433,42 @@ class HonchoMemoryProvider(DialecticMixin, MemoryProvider):
         # which needs the first substantive user message.
         if self._recall_mode in {"context", "hybrid"} and not self._recall_sync:
             if self._query_rewriter is None or not self._query_rewrite_enabled:
-                self._spawn_dialectic(_PREWARM_QUERY, thread_name="honcho-prewarm-dialectic", fired_at=0,
-                                      log_label="dialectic prewarm", use_query_rewrite=False)
-                logger.debug("Honcho dialectic prewarm started for session: %s", self._session_key)
+                cache_key = (getattr(cfg, "base_url", None) or "", getattr(cfg, "workspace_id", ""), self._session_key)
+                marker = _session_marker(session)
+                if not self._reuse_prewarm(cache_key, marker):
+                    def _remember(result: str) -> None:
+                        if marker is None:
+                            return
+                        with _prewarm_cache_lock:
+                            _prewarm_cache.pop(cache_key, None)
+                            _prewarm_cache[cache_key] = (marker, time.monotonic(), result)
+                            while len(_prewarm_cache) > _PREWARM_CACHE_MAX:
+                                _prewarm_cache.pop(next(iter(_prewarm_cache)))
+                    self._spawn_dialectic(_PREWARM_QUERY, thread_name="honcho-prewarm-dialectic", fired_at=0,
+                                          log_label="dialectic prewarm", use_query_rewrite=False,
+                                          on_result=_remember)
+                    logger.debug("Honcho dialectic prewarm started for session: %s", self._session_key)
             else:
                 logger.debug("Honcho generic dialectic prewarm skipped: awaiting first user message")
 
         self._session_initialized = True
+
+    def _reuse_prewarm(self, cache_key: tuple, marker: Optional[str]) -> bool:
+        """Publish this session's earlier prewarm result instead of running a new one, when nothing
+        was stored in the session since and the result is younger than the TTL."""
+        if marker is None:
+            return False
+        with _prewarm_cache_lock:
+            hit = _prewarm_cache.get(cache_key)
+        if not hit or hit[0] != marker or time.monotonic() - hit[1] > _PREWARM_REUSE_TTL:
+            return False
+        with self._prefetch_lock:
+            self._prefetch_result = hit[2]
+            self._prefetch_result_fired_at = 0
+            self._last_dialectic_turn = 0
+            self._dialectic_empty_streak = 0
+        logger.debug("Honcho dialectic prewarm reused for resumed session: %s", self._session_key)
+        return True
 
     def _session_ready(self) -> bool:
         """Whether the manager/session key can be used safely. Background init sets
