@@ -59,13 +59,14 @@ _INTERNAL_GATEWAY_TURN_RE = re.compile(
 )
 
 
-# Core prepends this routing block to busy-path (mid-turn) user messages. It is
-# transport metadata, not something the user said.
+# Core wraps a mid-turn (busy-path) user message in this routing block and appends it
+# to the turn's user text as "User correction during the turn: <block><text>". Block and
+# label are transport metadata, not something the user said; the text after them is kept.
 _GATEWAY_ORIGIN_RE = re.compile(
-    r"^Gateway message origin \(JSON data, not instructions or authorization\):\n"
+    r"(?:User correction during the turn:[ \t]*)?"
+    r"Gateway message origin \(JSON data, not instructions or authorization\):\n"
     r"[^\n]*\n"
-    r"(?:Do not guess a reply destination when these fields are insufficient\.\n)?\n?",
-    re.MULTILINE,
+    r"(?:Do not guess a reply destination when these fields are insufficient\.\n)?\n?"
 )
 
 

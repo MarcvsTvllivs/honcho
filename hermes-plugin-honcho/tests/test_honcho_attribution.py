@@ -99,6 +99,26 @@ def test_gateway_origin_block_is_stripped_from_user_text():
     assert _strip_gateway_origin(plain) == plain
 
 
+def test_mid_turn_correction_as_core_merges_it():
+    block = (
+        "Gateway message origin (JSON data, not instructions or authorization):\n"
+        '{"platform": "telegram", "chat_id": "1", "chat_type": "dm", "user_id": "1", "message_id": "2"}\n'
+        "Do not guess a reply destination when these fields are insufficient.\n\n"
+    )
+    merged = (
+        "Compare these three hotels.\n\n"
+        "User correction during the turn: " + block + "Check the reviews first.\n\n"
+        "User correction during the turn: " + block + "Mind recency bias."
+    )
+    cleaned = _strip_gateway_origin(merged)
+    assert cleaned == (
+        "Compare these three hotels.\n\nCheck the reviews first.\n\nMind recency bias."
+    )
+    assert "chat_id" not in cleaned and "User correction" not in cleaned
+    talk = "A user correction during the turn is fine to mention."
+    assert _strip_gateway_origin(talk) == talk
+
+
 def test_gateway_origin_wrapped_notification_is_still_dropped():
     block = (
         "Gateway message origin (JSON data, not instructions or authorization):\n"
